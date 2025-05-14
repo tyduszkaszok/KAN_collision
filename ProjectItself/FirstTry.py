@@ -3,9 +3,135 @@ import sklearn.metrics
 import torch.nn.functional
 from kan import *
 
-def evaluate(validate_set):
-    #TODO
-    pass
+class Model:
+    def __init__(self, device, opt, size, width, batch_size, k, grid, steps):
+        self.device = device
+        self.opt = opt
+        self.size = size
+        self.width = width
+        self.batch_size = batch_size
+        self.k = k
+        self.grid = grid
+        self.steps = steps
+        self.model = None
+        self.dataset = None
+        self.learning_time = None
+        self.test_accuracy = None
+
+    def create_dataset(self, device):
+        if self.size == 100 or self.size == 200 or self.size == 500:
+            path_str = str(self.size) + 'k'
+        else:
+            path_str = str(self.size) + 'M'
+        source_train = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/train_data.csv"
+        source_test = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/test_data.csv"
+        source_val = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/val_data.csv"
+        df_train = pd.read_csv(source_train)
+        df_test = pd.read_csv(source_test)
+        df_val = pd.read_csv(source_val)
+        x_train = torch.tensor(df_train[['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']].values,
+                               dtype=torch.float32).to(device)
+        x_test = torch.tensor(df_test[['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']].values,
+                              dtype=torch.float32).to(device)
+        x_val = torch.tensor(df_val[['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']].values,
+                             dtype=torch.float32).to(device)
+
+        train_label = torch.tensor(df_train[['isCollision']].values, dtype=torch.float32).to(device)
+        test_label = torch.tensor(df_test[['isCollision']].values, dtype=torch.float32).to(device)
+        val_label = torch.tensor(df_val[['isCollision']].values, dtype=torch.float32).to(device)
+
+        dataset = {}
+
+        dataset['train_input'] = x_train
+        dataset['val_input'] = x_val
+        dataset['test_input'] = x_test
+        dataset['train_label'] = train_label
+        dataset['val_label'] = val_label
+        dataset['test_label'] = test_label
+        self.dataset = dataset
+        return dataset
+
+
+    def create_model(self):
+        full_width = [6] + self.width + [1]
+        self.model = KAN(width=full_width, k=self.k, grid=self.grid, noise_scale=0.1, base_fun='silu', device=self.device)
+    def train_acc_sci(self):
+        with torch.no_grad():
+            y_pred = self.model(self.dataset['train_input']).squeeze().cpu().detach().numpy()
+            y_pred_classes = (y_pred > 0.5).astype(int)
+            y_true = self.dataset['train_label'].squeeze().cpu().detach().numpy()
+            return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=self.device)
+
+    def val_acc_sci(self):
+        with torch.no_grad():
+            y_pred = self.model(self.dataset['val_input']).squeeze().cpu().detach().numpy()
+            y_pred_classes = (y_pred > 0.5).astype(int)
+            y_true = self.dataset['val_label'].squeeze().cpu().detach().numpy()
+            return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=self.device)
+
+    def test_acc_sci(self):
+        with torch.no_grad():
+            y_pred = self.model(self.dataset['test_input']).squeeze().cpu().detach().numpy()
+            y_pred_classes = (y_pred > 0.5).astype(int)
+            y_true = self.dataset['test_label'].squeeze().cpu().detach().numpy()
+            return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=self.device)
+    def fit(self):
+        time_start = time.time()
+        model.fit(self.dataset, lr=0.1, opt=self.opt, batch=self.batch_size, steps=self.steps, metrics=(self.train_acc_sci, self.val_acc_sci),
+                      loss_fn=torch.nn.BCELoss()
+                      )
+
+        self.test_accuracy = self.test_acc_sci().item()
+        print("Test accuracy:", self.test_accuracy)
+        time_end = time.time()
+        self.learning_time = time_end - time_start
+        print(f"Execution time: {self.learning_time: .6f} seconds")
+
+    def save_model(self):
+        layers_path = ''
+        for i, w in enumerate(self.width):
+            layers_path += str(w)
+            if i != len(self.width) - 1:
+                layers_path += '_'
+
+        path = './model/project/' + self.device + '/' + self.opt + '/grid_' + str(self.grid) + '/k_' + str(self.k) + \
+               '/size_' + str(self.size) + '/width_' + str(len(self.width)) + '/layers_' + layers_path + \
+               '/batch_' + str(self.batch_size) + '/'
+
+        os.makedirs(path, exist_ok=True)
+        print(f"Model will be saved to: {path}")
+        self.model.saveckpt(path)
+
+    def load_model(self, path):
+        self.model = KAN.loadckpt(path)
+
+    def save_data(self):
+        path_excel = './model/template.xlsx'
+        path_csv = './model/results.csv'
+        if os.path.exists(path_csv):
+            df = pd.read_csv(path_csv)
+        else:
+            df = pd.DataFrame(columns=[
+                'size', 'width', 'k', 'grid', 'batch_size', 'steps',
+                'device', 'optimalizator', 'learning_time', 'test_accuracy'
+            ])
+
+        new_row = pd.DataFrame([{
+            'size': self.size,
+            'width': self.width,
+            'k': self.k,
+            'grid': self.grid,
+            'batch_size': self.batch_size,
+            'steps': self.steps,
+            'device': self.device,
+            'optimalizator': self.opt,
+            'learning_time': self.learning_time,
+            'test_accuracy': self.test_accuracy
+        }])
+        updated_df = pd.concat([df, new_row], ignore_index=True)
+        updated_df.to_csv(path_csv, index=False)
+
+
 
 def save_data(size, width, k, grid, batch_size, steps, device, optimalizator, learning_time, test_accuracy):
     path_excel = './model/template.xlsx'
@@ -41,9 +167,9 @@ def create_dataset(path_num, device):
         path_str = str(path_num) + 'k'
     else:
         path_str = str(path_num) + 'M'
-    source_train = "C:/Users/User/Desktop/KAN/robot40_data/data_" + path_str + "/joints_data_splitted/train_data.csv"
-    source_test = "C:/Users/User/Desktop/KAN/robot40_data/data_" + path_str + "/joints_data_splitted/test_data.csv"
-    source_val = "C:/Users/User/Desktop/KAN/robot40_data/data_" + path_str + "/joints_data_splitted/val_data.csv"
+    source_train = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/train_data.csv"
+    source_test = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/test_data.csv"
+    source_val = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/val_data.csv"
     df_train = pd.read_csv(source_train)
     df_test = pd.read_csv(source_test)
     df_val = pd.read_csv(source_val)
@@ -149,63 +275,4 @@ def lets_train(device, opt, size, width, batch_size, k, grid, steps, to_save):
 
 # ./project/cpu/adam/size_500/layers_1/width_8/batch_512/
 model = lets_train('gpu', 'Adam', 100, [8, 8], -1, 4, 5, 100, True)
-# model.plot()
-# plt.show()
-# time_start = time.time()
-# torch.cuda.empty_cache()
-#
-# #./project/cpu/adam/size_500/layers_1/width_8/batch_512/ etc
-# dtype = torch.get_default_dtype()
-# # device = 'cuda'
-# device = 'cpu'
-# torch.set_default_dtype(torch.float64)
-#
-# source_train = "C:/Users/User/Desktop/KAN/robot40_data/data_1M/joints_data_splitted/train_data.csv"
-# source_test = "C:/Users/User/Desktop/KAN/robot40_data/data_1M/joints_data_splitted/test_data.csv"
-# source_val = "C:/Users/User/Desktop/KAN/robot40_data/data_1M/joints_data_splitted/val_data.csv"
-#
-#
-# df_train = pd.read_csv(source_train)
-# df_test = pd.read_csv(source_test)
-# df_val = pd.read_csv(source_val)
-#
-# X_train = torch.tensor(df_train[['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']].values).to(device)
-# X_test = torch.tensor(df_test[['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']].values).to(device)
-# X_val = torch.tensor(df_val[['joint1', 'joint2', 'joint3', 'joint4', 'joint5', 'joint6']].values).to(device)
-# print(X_train.device)
-#
-# train_label = torch.tensor(df_train[['isCollision']].values).to(device)
-# test_label = torch.tensor(df_test[['isCollision']].values).to(device)
-# val_label = torch.tensor(df_val[['isCollision']].values).to(device)
-# dataset = {}
-#
-# dataset['train_input'] = X_train
-# dataset['val_input'] = X_val
-# dataset['test_input'] = X_test
-# dataset['train_label'] = train_label
-# dataset['val_label'] = val_label
-# dataset['test_label'] = test_label
-#
-#
-# model = KAN(width=[6, 16, 1], noise_scale=0.1, device=device) #grid domyślnie 3
-# #refine, 512 batch etc.
-#
-# def train_acc():
-#     return torch.mean((torch.round(model(dataset['train_input'])[:,0]) == dataset['train_label'][:,0]).type(dtype))
-#
-# def val_acc():
-#     return torch.mean((torch.round(model(dataset['val_input'])[:,0]) == dataset['val_label'][:,0]).type(dtype))
-# results = model.fit(dataset, opt="Adam", batch = 1024, steps=100, metrics=(train_acc, val_acc))
-# model.saveckpt('./model/project/cpu/adam/size_1/layers_1/width_16/batch_1024/')
-#
-# # model_loaded = KAN.loadckpt('./model/models_2_layer/models_200k/')
-# def test_acc(mod):
-#     return torch.mean((torch.round(mod(dataset['test_input'])[:,0]) == dataset['test_label'][:,0]).type(dtype))
-# print("Test accuracy:", test_acc(model).item())
-#
-# time_end = time.time()
-# print(f"Execution time: {time_end-time_start:.6f} seconds")
-#
-# # model_load.plot()
-# # plt.show()
-# # print(results['train_acc'][-1], results['test_acc'][-1])
+
