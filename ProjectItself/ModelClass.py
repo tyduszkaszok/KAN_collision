@@ -3,6 +3,7 @@ import sklearn.metrics
 import torch.nn.functional
 from kan import *
 
+
 class Model:
     def __init__(self, device, opt, size, width, batch_size, k, grid, steps):
         self.device = device
@@ -51,10 +52,11 @@ class Model:
         self.dataset = dataset
         return dataset
 
-
     def create_model(self):
         full_width = [6] + self.width + [1]
-        self.model = KAN(width=full_width, k=self.k, grid=self.grid, noise_scale=0.1, base_fun='silu', device=self.device)
+        self.model = KAN(width=full_width, k=self.k, grid=self.grid, noise_scale=0.1, base_fun='silu',
+                         device=self.device)
+
     def train_acc_sci(self):
         with torch.no_grad():
             y_pred = self.model(self.dataset['train_input']).squeeze().cpu().detach().numpy()
@@ -75,11 +77,13 @@ class Model:
             y_pred_classes = (y_pred > 0.5).astype(int)
             y_true = self.dataset['test_label'].squeeze().cpu().detach().numpy()
             return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=self.device)
+
     def fit(self):
         time_start = time.time()
-        model.fit(self.dataset, lr=0.1, opt=self.opt, batch=self.batch_size, steps=self.steps, metrics=(self.train_acc_sci, self.val_acc_sci),
-                      loss_fn=torch.nn.BCELoss()
-                      )
+        self.model.fit(self.dataset, lr=0.1, opt=self.opt, batch=self.batch_size, steps=self.steps,
+                       metrics=(self.train_acc_sci, self.val_acc_sci),
+                       loss_fn=torch.nn.BCEWithLogitsLoss()
+                       )
 
         self.test_accuracy = self.test_acc_sci().item()
         print("Test accuracy:", self.test_accuracy)
@@ -132,6 +136,19 @@ class Model:
         updated_df.to_csv(path_csv, index=False)
 
 
+model = Model(
+    device="cpu",
+    opt="Adam",
+    size=100,
+    width=[8, 8],
+    batch_size=-1,
+    k=5,
+    grid=4,
+    steps=100
+)
+model.create_model()
+model.create_dataset(device="cpu")
+model.fit()
 
 def save_data(size, width, k, grid, batch_size, steps, device, optimalizator, learning_time, test_accuracy):
     path_excel = './model/template.xlsx'
@@ -158,8 +175,6 @@ def save_data(size, width, k, grid, batch_size, steps, device, optimalizator, le
     }])
     updated_df = pd.concat([df, new_row], ignore_index=True)
     updated_df.to_csv(path_csv, index=False)
-
-
 
 
 def create_dataset(path_num, device):
@@ -195,9 +210,6 @@ def create_dataset(path_num, device):
     return dataset
 
 
-
-
-
 def lets_train(device, opt, size, width, batch_size, k, grid, steps, to_save):
     time_start = time.time()
     if device == 'gpu':
@@ -210,7 +222,8 @@ def lets_train(device, opt, size, width, batch_size, k, grid, steps, to_save):
         if i != len(width) - 1:
             layers_path += '_'
 
-    path = './model/project/' + device + '/' + opt + '/grid_' + str(grid) + '/k_' + str(k) + '/size_' + str(size) + '/width_' + str(
+    path = './model/project/' + device + '/' + opt + '/grid_' + str(grid) + '/k_' + str(k) + '/size_' + str(
+        size) + '/width_' + str(
         len(width)) + '/layers_' + layers_path + '/batch_' + str(batch_size) + '/'
     full_width = [6] + width + [1]
 
@@ -227,31 +240,36 @@ def lets_train(device, opt, size, width, batch_size, k, grid, steps, to_save):
 
         def train_acc_sci():
             with torch.no_grad():
-                y_pred = model(dataset['train_input']).squeeze().cpu().detach().numpy()
-                y_pred_classes = (y_pred > 0.5).astype(int)
+                logits = model(dataset['train_input']).squeeze()
+                probs = torch.sigmoid(logits)
+                y_pred_classes = (probs > 0.5).cpu().numpy().astype(int)
                 y_true = dataset['train_label'].squeeze().cpu().detach().numpy()
                 return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=device)
 
         def val_acc_sci():
             with torch.no_grad():
-                y_pred = model(dataset['val_input']).squeeze().cpu().detach().numpy()
-                y_pred_classes = (y_pred > 0.5).astype(int)
+                logits = model(dataset['val_input']).squeeze()
+                probs = torch.sigmoid(logits)
+                y_pred_classes = (probs > 0.5).cpu().numpy().astype(int)
                 y_true = dataset['val_label'].squeeze().cpu().detach().numpy()
                 return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=device)
 
         def test_acc_sci(mod):
             with torch.no_grad():
-                y_pred = mod(dataset['test_input']).squeeze().cpu().detach().numpy()
-                y_pred_classes = (y_pred > 0.5).astype(int)
+                logits = model(dataset['test_input']).squeeze()
+                probs = torch.sigmoid(logits)
+                y_pred_classes = (probs > 0.5).cpu().numpy().astype(int)
                 y_true = dataset['test_label'].squeeze().cpu().detach().numpy()
                 return torch.tensor(sklearn.metrics.accuracy_score(y_true, y_pred_classes), device=device)
 
         def val_acc():
             return torch.mean(
                 (torch.round(model(dataset['val_input'])[:, 0]) == dataset['val_label'][:, 0]).type(dtype))
-#zmniejszyć lr, BCEloss zamiast crossentropy, scikit accuracy, Adam vs LBFGS
-        model.fit(dataset, lr=0.1, opt=opt, batch=batch_size, steps=steps, metrics=(train_acc_sci, val_acc_sci), loss_fn=torch.nn.BCELoss()
-)
+
+        #zmniejszyć lr, BCEloss zamiast crossentropy, scikit accuracy, Adam vs LBFGS
+        model.fit(dataset, lr=0.1, opt=opt, batch=batch_size, steps=steps, metrics=(train_acc_sci, val_acc_sci),
+                  loss_fn=torch.nn.BCELoss()
+                  )
         model.saveckpt(path)
         model_test = model
     else:
@@ -260,7 +278,6 @@ def lets_train(device, opt, size, width, batch_size, k, grid, steps, to_save):
 
     def test_acc(mod):
         return torch.mean((torch.round(mod(dataset['test_input'])[:, 0]) == dataset['test_label'][:, 0]).type(dtype))
-
 
     test_accuracy = test_acc(model_test).item()
     print("Test accuracy:", test_accuracy)
@@ -272,7 +289,5 @@ def lets_train(device, opt, size, width, batch_size, k, grid, steps, to_save):
 
     return model_test
 
-
 # ./project/cpu/adam/size_500/layers_1/width_8/batch_512/
-model = lets_train('gpu', 'Adam', 100, [8, 8], -1, 4, 5, 100, True)
-
+# model = lets_train('gpu', 'Adam', 100, [8, 8], -1, 4, 5, 100, True)
