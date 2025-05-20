@@ -1,7 +1,11 @@
 import time
+import gc
 import sklearn.metrics
 import torch.nn.functional
 from kan import *
+import os
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 class Model:
@@ -18,15 +22,17 @@ class Model:
         self.dataset = None
         self.learning_time = None
         self.test_accuracy = None
+        self.train_accuracy = None
+        self.val_accuracy = None
 
     def create_dataset(self, device):
         if self.size == 100 or self.size == 200 or self.size == 500:
             path_str = str(self.size) + 'k'
         else:
             path_str = str(self.size) + 'M'
-        source_train = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/train_data.csv"
-        source_test = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/test_data.csv"
-        source_val = "C:/Users/bobic/Desktop/KAN_collision/ProjectItself/robot40_data/data_" + path_str + "/joints_data_splitted/val_data.csv"
+        source_train = "C:/Users/User/Desktop/KAN/robot40_data/data_" + path_str + "/joints_data_splitted/train_data.csv"
+        source_test = "C:/Users/User/Desktop/KAN/robot40_data/data_" + path_str + "/joints_data_splitted/test_data.csv"
+        source_val = "C:/Users/User/Desktop/KAN/robot40_data/data_" + path_str + "/joints_data_splitted/val_data.csv"
         df_train = pd.read_csv(source_train)
         df_test = pd.read_csv(source_test)
         df_val = pd.read_csv(source_val)
@@ -87,6 +93,10 @@ class Model:
 
         self.test_accuracy = self.test_acc_sci().item()
         print("Test accuracy:", self.test_accuracy)
+        self.train_accuracy = self.train_acc_sci().item()
+        print("Train accuracy:", self.train_accuracy)
+        self.val_accuracy = self.val_acc_sci().item()
+        print("Validation accuracy:", self.val_accuracy)
         time_end = time.time()
         self.learning_time = time_end - time_start
         print(f"Execution time: {self.learning_time: .6f} seconds")
@@ -111,13 +121,13 @@ class Model:
 
     def save_data(self):
         path_excel = './model/template.xlsx'
-        path_csv = './model/results.csv'
+        path_csv = './model/new_results.csv'
         if os.path.exists(path_csv):
             df = pd.read_csv(path_csv)
         else:
             df = pd.DataFrame(columns=[
                 'size', 'width', 'k', 'grid', 'batch_size', 'steps',
-                'device', 'optimalizator', 'learning_time', 'test_accuracy'
+                'device', 'optimalizator', 'learning_time', 'test_accuracy', 'train_accuracy', 'val_accuracy'
             ])
 
         new_row = pd.DataFrame([{
@@ -130,24 +140,101 @@ class Model:
             'device': self.device,
             'optimalizator': self.opt,
             'learning_time': self.learning_time,
-            'test_accuracy': self.test_accuracy
+            'test_accuracy': self.test_accuracy,
+            'train_accuracy': self.train_accuracy,
+            'val_accuracy': self.val_accuracy
         }])
         updated_df = pd.concat([df, new_row], ignore_index=True)
         updated_df.to_csv(path_csv, index=False)
 
+    # available metrics: ‘forward_n’, ‘forward_u’, ‘backward’
+    # is_prune: True - removes insignificant neurons
+    def train_data_plot(self, is_pruned, beta_plot=100000, metric='backward'):
+        model_plot = self.model(self.dataset['train_input'])
+        if is_pruned:
+            model_plot = self.model.prune()
+        model_plot.plot(beta=beta_plot, metric=metric)
+
+    def test_data_plot(self, is_pruned, beta_plot=100000, metric='backward'):
+        model_plot = self.model(self.dataset['test_input'])
+        if is_pruned:
+            model_plot = self.model.prune()
+        model_plot.plot(beta=beta_plot, metric=metric)
+
+    def val_data_plot(self, is_pruned, beta_plot=100000, metric='backward'):
+        model_plot = self.model(self.dataset['val_input'])
+        if is_pruned:
+            model_plot = self.model.prune()
+        model_plot.plot(beta=beta_plot, metric=metric)
+
+    def predict_with_grad(self, x_samples):
+        pass
+        #
+        # input_tensor = torch.tensor(x_samples, dtype=torch.float32, requires_grad=True)
+        #
+        # outputs = self.model(input_tensor)
+        #
+        # grads_list = []
+        #
+        # for i in range(outputs.size(0)):  # Iterate over each sample in the batch
+        #     self.model.zero_grad()  # Clear previous gradients
+        #
+        #     # Compute the gradient of the output w.r.t. the input
+        #     grad = torch.autograd.grad(outputs[i], input_tensor, retain_graph=True, create_graph=False)[0]
+        #
+        #     # Append the gradient for the i-th input
+        #     grads_list.append(grad[i].detach().numpy())
+        #
+        # # Convert to NumPy arrays
+        # grads = np.asarray(grads_list)
+        # probs = outputs.detach().numpy().reshape(-1)
+        #
+        # return probs, probs > self.prob_threshold, grads.reshape(-1)
+
+# [256, 256, 256]
+# [176, 176, 176]
+# [64, 64, 64]
+# [32, 32, 32]
+# [16, 16, 16]
+# [64, 64]
+# [32, 32]
+# 10 warstw x 256 neuronów
+
+
+batch = 512
+while batch <= 500000:
+    model = Model(
+        device="cuda",
+        opt="LBFGS",
+        size=500,
+        width=[16, 16, 16],
+        batch_size=batch,
+        k=3,
+        grid=4,
+        steps=200
+    )
+    # autograd
+    model.create_model()
+    model.create_dataset(device="cuda")
+    model.fit()
+    model.save_data()
+
+    del model
+    torch.cuda.empty_cache()
+    gc.collect()
+    batch *= 2
 
 model = Model(
-    device="cpu",
-    opt="Adam",
-    size=100,
-    width=[8, 8],
+    device="cuda",
+    opt="LBFGS",
+    size=500,
+    width=[16, 16, 16],
     batch_size=-1,
-    k=5,
-    grid=4,
-    steps=100
+    k=3,
+    grid=3,
+    steps=200
 )
 model.create_model()
-model.create_dataset(device="cpu")
+model.create_dataset(device="cuda")
 model.fit()
-
-
+model.save_data()
