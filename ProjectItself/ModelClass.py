@@ -1,5 +1,4 @@
 import time
-import gc
 import sklearn.metrics
 import torch.nn.functional
 from kan import *
@@ -149,92 +148,81 @@ class Model:
 
     # available metrics: ‘forward_n’, ‘forward_u’, ‘backward’
     # is_prune: True - removes insignificant neurons
-    def train_data_plot(self, is_pruned, beta_plot=100000, metric='backward'):
-        model_plot = self.model(self.dataset['train_input'])
-        if is_pruned:
-            model_plot = self.model.prune()
-        model_plot.plot(beta=beta_plot, metric=metric)
 
-    def test_data_plot(self, is_pruned, beta_plot=100000, metric='backward'):
-        model_plot = self.model(self.dataset['test_input'])
-        if is_pruned:
-            model_plot = self.model.prune()
-        model_plot.plot(beta=beta_plot, metric=metric)
-
-    def val_data_plot(self, is_pruned, beta_plot=100000, metric='backward'):
-        model_plot = self.model(self.dataset['val_input'])
-        if is_pruned:
-            model_plot = self.model.prune()
-        model_plot.plot(beta=beta_plot, metric=metric)
+    def KAN_plot(self, isPruned, beta_plot=100, metric='backward'):
+        if isPruned:
+            self.model.prune()
+        self.model.plot(beta=beta_plot, metric=metric)
+        plt.show()
 
     def predict_with_grad(self, x_samples):
-        pass
-        #
-        # input_tensor = torch.tensor(x_samples, dtype=torch.float32, requires_grad=True)
-        #
-        # outputs = self.model(input_tensor)
-        #
-        # grads_list = []
-        #
-        # for i in range(outputs.size(0)):  # Iterate over each sample in the batch
-        #     self.model.zero_grad()  # Clear previous gradients
-        #
-        #     # Compute the gradient of the output w.r.t. the input
-        #     grad = torch.autograd.grad(outputs[i], input_tensor, retain_graph=True, create_graph=False)[0]
-        #
-        #     # Append the gradient for the i-th input
-        #     grads_list.append(grad[i].detach().numpy())
-        #
-        # # Convert to NumPy arrays
-        # grads = np.asarray(grads_list)
-        # probs = outputs.detach().numpy().reshape(-1)
-        #
-        # return probs, probs > self.prob_threshold, grads.reshape(-1)
+        self.model.eval()
+        input_tensor = torch.tensor(x_samples, dtype=torch.float32, requires_grad=True).to(self.device)
+        outputs = self.model(input_tensor).squeeze(-1)
+        grads_list = []
+        for i in range(outputs.size(0)):
+            self.model.zero_grad()
+            grad = torch.autograd.grad(outputs[i], input_tensor, retain_graph=True, create_graph=False)[0]
+            grads_list.append(grad[i].detach().cpu().numpy())
 
-# [256, 256, 256]
-# [176, 176, 176]
-# [64, 64, 64]
-# [32, 32, 32]
-# [16, 16, 16]
-# [64, 64]
-# [32, 32]
-# 10 warstw x 256 neuronów
+        grads = np.asarray(grads_list)
+        probs = torch.sigmoid(outputs).detach().cpu().numpy()
+        print("Prawdopodobieństwo kolizji:", probs[0])
+        print("Gradienty:", grads[0])
+        return probs, probs > 0.5, grads
 
 
-batch = 512
-while batch <= 500000:
-    model = Model(
-        device="cuda",
-        opt="LBFGS",
-        size=500,
-        width=[16, 16, 16],
-        batch_size=batch,
-        k=3,
-        grid=4,
-        steps=200
-    )
-    # autograd
-    model.create_model()
-    model.create_dataset(device="cuda")
-    model.fit()
-    model.save_data()
-
-    del model
-    torch.cuda.empty_cache()
-    gc.collect()
-    batch *= 2
+# Tworzymy obiekt klasy Model - będzie on dalej reprezentował naszą sieć:
+# model = Model(device="cuda",opt="LBFGS",size=100,width=[16, 16],batch_size=batch,k=3,grid=4,steps=100)
+# Gdzie device to 'cpu' albo 'cuda', opt to optymalizator - do wyboru tylko 'Adam'
+# albo "LBFGS", size to rozmiar danych - 100, 200, 500, 1 lub 2 (służy to tylko do tworzenia
+# ścieżek zapisu modeli, podajemy 100 jeśli sieć to 100k, 1 jeśli 1M,
+# width to liczba neuronów w warstwach ukrytych (pomijamy warstwę wejściową i wyjściową),
+# batch_size to rozmiar wsadu, k to stopień wielomianów, grid to rozmiar siatki wielomianów,
+# steps to liczba epochów
 
 model = Model(
     device="cuda",
     opt="LBFGS",
     size=500,
-    width=[16, 16, 16],
+    width=[16, 16],
     batch_size=-1,
     k=3,
-    grid=3,
-    steps=200
+    grid=4,
+    steps=100
 )
+
+# Dalej wywołujemy metodę create_model() - tworzy ona nasz model
 model.create_model()
+
+# Następnie używamy metody create_dataset - tworzy ona zbiór danych (są w nim dane treningowe,
+# walidacyjne oraz testowe), jeśli chcemy zmienić ścieżkę do naszych danych, robimy to w definicji funkcji
+# jako argument podajemy jedynie "cuda" albo "cpu" w zależności od tego, gdzie trzymamy dane
 model.create_dataset(device="cuda")
+
+# W kolejnym kroku wykonujemy metodę fit() - to ona rozpoczyna trening, domyślnie jako szybkość uczenia
+# wybrane jest 0.01
 model.fit()
+
+# Jeśli chcemy zapisać informacje o naszym modelu, wykonujemy metodę save_data() po zakończonym treningu
+# Dane zostaną przekierowane do wskazanego w definicji pliku .csv, który powinienen być zgodny
+# z umieszczonym wewnątrz funkcji schematem etykiet
 model.save_data()
+
+# W celu zapisania naszego modelu używamy save_model() - zapisuje ona nasz model do domyślnej lokalizacji,
+# definiowanej na podstawie parametrów sieci
+# model.save_model()
+
+# Alternatywnie, możemy załadować nasz model przy pomocy load_model() wraz ze wskazaną ścieżką
+# źródłową jako argument
+# model.load_model('./model/project/cuda/LBFGS/grid_4/k_3/size_100/width_2/layers_16_16/batch_512/')
+
+# Aby zwizualizować sieć, należy użyć KAN_plot(), parametry to isPruned - usuwa niepotrzebne neurony
+# beta - wskazuje, jak bardzo pod uwagę brane są mniej znaczące połączenia (zalecana jest dość niska wartość, np. 100)
+# metric - metryki
+# Uwaga - uruchamianie tej funkcji ze względu na złożoność sieci jest nieco czasochłonne
+model.KAN_plot(False)
+
+# Obliczanie gradientu
+sample = random.choice(model.dataset['test_input']).unsqueeze(0)
+model.predict_with_grad(sample)
